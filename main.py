@@ -48,7 +48,7 @@ def chatgpt_reply(user_message):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": "You are a friendly barber shop assistant. Respond in the user's language."},
             {"role": "user", "content": user_message}
