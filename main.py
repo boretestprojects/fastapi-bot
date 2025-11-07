@@ -1,14 +1,16 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
 import requests
 import os
 
 app = FastAPI()
 
-VERIFY_TOKEN = "barberbot_verify_token"
+# ===== CONFIG =====
+VERIFY_TOKEN = "barberbot_verify_token"  # това ще въведеш в Meta Developer
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-
+# ===== WEBHOOK VERIFY =====
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     mode = request.query_params.get("hub.mode")
@@ -16,10 +18,12 @@ async def verify_webhook(request: Request):
     challenge = request.query_params.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        return int(challenge)
+        # Важно: Meta очаква отговор в текстов формат, не като число
+        return PlainTextResponse(challenge)
     return {"error": "Invalid verification"}
 
 
+# ===== WEBHOOK EVENTS =====
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     data = await request.json()
@@ -41,6 +45,7 @@ async def handle_webhook(request: Request):
     return {"status": "ok"}
 
 
+# ===== OPENAI (ChatGPT) =====
 def chatgpt_reply(user_message):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -59,10 +64,12 @@ def chatgpt_reply(user_message):
     return data["choices"][0]["message"]["content"]
 
 
+# ===== FACEBOOK (SEND MESSAGE) =====
 def send_message(recipient_id, text):
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": recipient_id},
         "message": {"text": text}
     }
-    requests.post(url, json=payload)
+    response = requests.post(url, json=payload)
+    print("📤 Sent message:", response.text)
