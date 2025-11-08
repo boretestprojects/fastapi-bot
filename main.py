@@ -42,11 +42,22 @@ def get_services():
     values = sheet.get("values", [])
     return {r[0].lower(): {"price": r[1], "duration": r[2]} for r in values if len(r) >= 3}
 
-def create_event(service_name, start_time, duration=30, user_name="Messenger клиент"):
+def get_barbers():
+    sheet = sheets_service.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID,
+        range="Barbers!A2:C"
+    ).execute()
+    values = sheet.get("values", [])
+    return [{"name": r[0], "days": r[1], "specialty": r[2]} for r in values if len(r) >= 3]
+
+def create_event(service_name, start_time, duration=30, user_name="Messenger клиент", barber=None):
     start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
     end = start + timedelta(minutes=duration)
+    summary = f"{user_name} – {service_name}"
+    if barber:
+        summary += f" ({barber})"
     event = {
-        "summary": f"{user_name} – {service_name}",
+        "summary": summary,
         "start": {"dateTime": start.isoformat() + "Z"},
         "end": {"dateTime": end.isoformat() + "Z"},
     }
@@ -57,26 +68,35 @@ def ask_gpt(messages):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
-    # динамично зареждане на услугите
+    # === Динамично четене на услуги и бръснари ===
     services = get_services()
+    barbers = get_barbers()
+
     services_text = "\n".join([
         f"- {k.title()} ({v['price']} лв / {v['duration']} мин)"
         for k, v in services.items()
     ])
+    barbers_text = "\n".join([
+        f"- {b['name']} (дни: {b['days']}, специалност: {b['specialty']})"
+        for b in barbers
+    ])
 
     system_prompt = {
         "role": "system",
-        "content": f"""You are SecretarBOT — a funny, friendly barber assistant.
-You help users book barber services based on the list below.
+        "content": f"""You are SecretarBOT — a friendly and funny barber assistant.
 Available services:
 {services_text}
 
-Ask for missing info step by step (service, time/date, barber).
-When all info is known, confirm the booking clearly, then tell a fun or curious fact related to hair, beards, or humans.
+Available barbers:
+{barbers_text}
+
+Ask for missing info step by step (service, date/time, barber).
+When all info is known, confirm the booking clearly,
+then tell a funny or interesting fact related to hair, beards, or humans.
 Never record or save the fact anywhere — just say it.
-Always sound cheerful, confident and humorous.
-If the user confirms the booking, respond with a JSON object like:
-{{"action": "create_booking", "service": "подстригване", "datetime": "2025-11-09 15:00"}}"""
+If the user confirms the booking, respond in JSON like:
+{{"action": "create_booking", "service": "подстригване", "datetime": "2025-11-09 15:00", "barber": "Миро"}}
+"""
     }
 
     payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
@@ -95,7 +115,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6.1 dynamic version active"}
+    return {"status": "ok", "message": "SecretarBOT v6.2 dynamic version (services + barbers)"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -115,16 +135,17 @@ async def webhook(request: Request):
                     reply = ask_gpt(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # Проверка дали GPT е върнал JSON за резервация
+                    # Проверка дали GPT е върнал JSON
                     try:
                         parsed = json.loads(reply)
                         if isinstance(parsed, dict) and parsed.get("action") == "create_booking":
                             service = parsed["service"]
                             dt = parsed["datetime"]
+                            barber = parsed.get("barber")
                             services = get_services()
                             duration = int(services.get(service.lower(), {}).get("duration", 30))
-                            link = create_event(service, dt, duration)
-                            send_message(psid, f"✅ Записах те за {service} ({dt}). Виж събитието тук: {link}")
+                            link = create_event(service, dt, duration, barber=barber)
+                            send_message(psid, f"✅ Записах те за {service} при {barber} ({dt}). Виж събитието тук: {link}")
                             continue
                     except Exception:
                         pass
