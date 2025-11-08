@@ -14,9 +14,10 @@ CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID")
 
 app = FastAPI()
 
-# ===== GOOGLE AUTH =====
-creds = service_account.Credentials.from_service_account_file(
-    "credentials.json",
+# ===== GOOGLE AUTH (използва ENV вместо credentials.json файл) =====
+creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+creds = service_account.Credentials.from_service_account_info(
+    creds_data,
     scopes=[
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/calendar"
