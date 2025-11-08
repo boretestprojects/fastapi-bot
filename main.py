@@ -3,7 +3,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 import os, json, traceback, re
 from datetime import datetime
 from ai.chat import generate_reply
-from gapi.sheets import get_services, update_clients, append_history
+from gapi.sheets import get_services, update_clients, append_history, is_barber_available
 from gapi.calendar import create_event
 from utils.helpers import send_message, get_user_name, random_fun_fact
 from utils.date_utils import parse_human_date
@@ -16,7 +16,7 @@ conversations = {}
 # ===== ROOT =====
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v8 – Barber_Data Edition"}
+    return {"status": "ok", "message": "SecretarBOT v8.1 – Barber Schedule Edition"}
 
 # ===== VERIFY WEBHOOK =====
 @app.get("/webhook")
@@ -47,7 +47,7 @@ async def webhook(request: Request):
                     reply = generate_reply(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # 🔍 търсим JSON за резервация дори ако има текст преди/след
+                    # 🔍 Търсим JSON за резервация дори ако има текст преди/след
                     try:
                         match = re.search(r'\{[^{}]*"action"\s*:\s*"create_booking"[^{}]*\}', reply)
                         if match:
@@ -58,24 +58,29 @@ async def webhook(request: Request):
                             barber = parsed.get("barber")
                             notes = parsed.get("notes", "")
 
-                            # 🔢 валидираме дата/час
+                            # 🔢 Валидираме дата/час
                             dt = parse_human_date(dt_raw)
                             if not dt:
                                 send_message(psid, "Хмм... не съм сигурен кога точно искаш. Може ли да ми кажеш точния ден и час? 🙂")
                                 continue
 
-                            # 🧾 данни за услугата
+                            # 🧾 Данни за услугата
                             services = get_services()
                             duration = int(services.get(service.lower(), {}).get("duration", 30))
 
-                            # 🧑‍🦱 клиентско име
+                            # 🧑‍🦱 Клиентско име
                             user_name = get_user_name(psid)
+
+                            # 🧭 Проверка дали бръснарят е на работа
+                            if not is_barber_available(barber, dt, service):
+                                send_message(psid, f"⚠️ {barber} не е на работа по това време. Избери друг ден или друг бръснар 🙂")
+                                continue
 
                             # 🗓️ Създаваме събитие в Google Calendar
                             event_link = create_event(service, dt, duration, user_name, barber, notes)
 
                             if not event_link:
-                                send_message(psid, f"⚠️ {barber} не е на смяна тогава. Избери друг ден или бръснар 🙂")
+                                send_message(psid, f"⚠️ {barber} не е на смяна тогава. Опитай друг ден или бръснар 🙂")
                                 continue
 
                             # 🧾 Запис в Sheets (Clients + History)
