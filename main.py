@@ -186,13 +186,16 @@ async def webhook(request: Request):
                         [f"- {k.title()} ({v['price']} NOK, {v['duration']} min)" for k, v in services.items()]
                     )
 
-                    # 1️⃣ Отговор от GPT
+                    # 1️⃣ GPT отговаря естествено
                     reply = ask_gpt(conversations[psid], services_text)
                     send_message(psid, reply)
 
-                    # 2️⃣ Автоматично разпознаване от текста
+                    # 2️⃣ Проверяваме и двете посоки (твоето + GPT)
                     service, barber, dt_obj = extract_info(user_text, services)
+                    if not service or not dt_obj:
+                        service, barber, dt_obj = extract_info(reply, services)
 
+                    # 3️⃣ Ако имаме всичко → запис
                     if service and dt_obj:
                         duration = services[service]["duration"]
                         update_clients(psid, user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), "")
@@ -210,3 +213,4 @@ async def webhook(request: Request):
     except Exception as e:
         print("❌ Error:", e)
     return {"status": "ok"}
+
