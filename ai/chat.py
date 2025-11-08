@@ -1,34 +1,38 @@
-import os, requests, json
-from gapi.sheets import get_services
+from datetime import datetime
+import pytz
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+def generate_reply(conversation):
+    from gapi.sheets import get_services
+    from utils.date_utils import parse_human_date
 
-def generate_reply(messages):
+    # вземаме текущата дата
+    now = datetime.now(pytz.timezone("Europe/Oslo"))
+    current_date = now.strftime("%A, %d %B %Y")
+    current_time = now.strftime("%H:%M")
+
     services = get_services()
-    services_text = "\n".join([
-        f"- {k.title()} ({v['price']} NOK / {v['duration']} мин)"
-        for k, v in services.items()
-    ])
+    services_text = "\n".join([f"- {k.title()} ({v['price']} NOK / {v['duration']} мин)" for k, v in services.items()])
 
     system_prompt = {
         "role": "system",
         "content": f"""
-You are SecretarBOT — a friendly multilingual barber assistant.
-You reply in the user's language.
+You are SecretarBOT — a friendly, funny barber assistant.
+Current date and time: {current_date}, {current_time}.
 Available services:
 {services_text}
 
-Ask for missing info step by step (service, date/time, barber).
-When all info is known, confirm the booking clearly and respond with JSON:
-{{"action": "create_booking", "service": "Herreklipp", "datetime": "2025-11-09 15:00", "barber": "Ivan", "notes": ""}}
-After successful confirmation, tell one fun fact about hair, beards, or barbers.
+Your task:
+- Talk naturally in the user's language.
+- You understand "today", "tomorrow", "Tuesday", etc. using the current date above.
+- Ask for service, time/date, and barber.
+- When confirmed, respond with a JSON: 
+  {{"action":"create_booking","service":"подстригване","datetime":"2025-11-09 15:00","barber":"Миро"}}
+- After successful booking, tell one fun fact about hair or beards.
 """
     }
 
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
-
-    r = requests.post(url, headers=headers, json=payload)
-    r.raise_for_status()
+    import requests, os, json
+    headers = {"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}", "Content-Type": "application/json"}
+    payload = {"model": "gpt-4o", "messages": [system_prompt] + conversation}
+    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
     return r.json()["choices"][0]["message"]["content"]
