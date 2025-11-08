@@ -10,6 +10,11 @@ VERIFY_TOKEN = "barberbot_verify_token"  # това ще въведеш в Meta 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ===== HEALTH CHECK / ROOT =====
+@app.get("/")
+async def home():
+    return {"status": "ok", "message": "Barber Bot is alive"}
+
 # ===== WEBHOOK VERIFY =====
 @app.get("/webhook")
 async def verify_webhook(request: Request):
@@ -21,7 +26,6 @@ async def verify_webhook(request: Request):
         # Важно: Meta очаква отговор в текстов формат, не като число
         return PlainTextResponse(challenge)
     return {"error": "Invalid verification"}
-
 
 # ===== WEBHOOK EVENTS =====
 @app.post("/webhook")
@@ -44,7 +48,6 @@ async def handle_webhook(request: Request):
 
     return {"status": "ok"}
 
-
 # ===== OPENAI (ChatGPT) =====
 def chatgpt_reply(user_message):
     url = "https://api.openai.com/v1/chat/completions"
@@ -62,7 +65,6 @@ def chatgpt_reply(user_message):
     response = requests.post(url, headers=headers, json=payload)
     data = response.json()
     return data["choices"][0]["message"]["content"]
-
 
 # ===== FACEBOOK (SEND MESSAGE) =====
 def send_message(recipient_id, text):
