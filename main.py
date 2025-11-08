@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
-import requests, os, json, re
+import requests, os, re, json
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -63,19 +63,6 @@ def get_services():
             }
     return services
 
-def get_barbers():
-    rows = get_sheet_range("Barbers")
-    barbers = {}
-    for r in rows:
-        if len(r) >= 4:
-            barbers[r[0].strip().lower()] = {
-                "days": r[1],
-                "start": r[2],
-                "end": r[3],
-                "restricted": r[4] if len(r) > 4 else "",
-            }
-    return barbers
-
 def update_clients(psid, name, service, barber, dt, notes):
     sheet = sheets_service.spreadsheets()
     values = get_sheet_range("Clients")
@@ -97,7 +84,7 @@ def update_clients(psid, name, service, barber, dt, notes):
             valueInputOption="RAW",
             body={"values": [[psid, name, service, barber, dt, notes]]},
         ).execute()
-    print("🧾 Client saved to sheet:", name, service, barber, dt)
+    print("🧾 Saved client:", name, service, barber, dt)
 
 def append_history(name, service, barber, dt, notes, psid):
     sheets_service.spreadsheets().values().append(
@@ -107,20 +94,6 @@ def append_history(name, service, barber, dt, notes, psid):
         body={"values": [[dt, name, service, barber, notes, psid]]},
     ).execute()
     print("📜 History appended:", name, dt)
-
-def parse_date(dt_str):
-    try:
-        dt = dateparser.parse(dt_str)
-        if not dt:
-            return None
-        dt = TIMEZONE.localize(dt)
-        if dt < datetime.now(TIMEZONE):
-            dt += timedelta(days=7)
-        print("🟢 Parsed date:", dt)
-        return dt
-    except Exception as e:
-        print("❌ Date parse failed:", e)
-        return None
 
 def create_event(name, service, barber, dt_obj, duration, notes):
     if not dt_obj:
@@ -136,25 +109,37 @@ def create_event(name, service, barber, dt_obj, duration, notes):
     print("📅 Calendar event created:", dt_obj)
     return True
 
-def ask_gpt(messages, services_text, barbers_text):
+def parse_date_from_text(text):
+    try:
+        dt = dateparser.parse(text, fuzzy=True)
+        if dt:
+            dt = TIMEZONE.localize(dt)
+            if dt < datetime.now(TIMEZONE):
+                dt += timedelta(days=7)
+            return dt
+    except:
+        return None
+
+def extract_info(text, services):
+    text_low = text.lower()
+    service = next((s for s in services if s in text_low), None)
+    dt_obj = parse_date_from_text(text)
+    barber = "Ivan" if "ivan" in text_low else "Bore" if "bore" in text_low else ""
+    return service, barber, dt_obj
+
+def ask_gpt(messages, services_text):
     system_prompt = {
         "role": "system",
-        "content": f"""You are SecretarBOT — a friendly barber assistant 💈
-Help users book hair & beard services.
-Ask step by step: service, date/time, barber, notes.
-When all info is ready, reply **only with pure JSON**, nothing else.
-Always produce future dates (never past).
+        "content": f"""You are SecretarBOT 💈 — a friendly barber assistant.
+Talk naturally, ask questions, make jokes, and help users book appointments.
+Don't output JSON, just confirm and chat.
 Available services:
-{services_text}
-Available barbers:
-{barbers_text}
-Format example:
-{{"action":"create_booking","service":"Herreklipp","datetime":"2025-11-09T15:00:00Z","barber":"Ivan","notes":"може да закъснея с 5 мин"}}"""
+{services_text}""",
     }
     payload = {
         "model": "gpt-4o",
         "messages": [system_prompt] + messages,
-        "temperature": 0.3,
+        "temperature": 0.8,
     }
     r = requests.post(
         "https://api.openai.com/v1/chat/completions",
@@ -178,7 +163,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6.4.2 PRO (Safe JSON + Date Fix) active"}
+    return {"status": "ok", "message": "SecretarBOT v6.5 Smart Parse Edition active"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -197,52 +182,31 @@ async def webhook(request: Request):
                     conversations[psid].append({"role": "user", "content": user_text})
 
                     services = get_services()
-                    barbers = get_barbers()
-
                     services_text = "\n".join(
                         [f"- {k.title()} ({v['price']} NOK, {v['duration']} min)" for k, v in services.items()]
                     )
-                    barbers_text = "\n".join(
-                        [f"- {k.title()} ({v['days']} {v['start']}-{v['end']})" for k, v in barbers.items()]
-                    )
 
-                    reply = ask_gpt(conversations[psid], services_text, barbers_text)
-                    print("🤖 GPT replied:", reply)
+                    # 1️⃣ Отговор от GPT
+                    reply = ask_gpt(conversations[psid], services_text)
+                    send_message(psid, reply)
 
-                    try:
-                        parsed = json.loads(reply)
-                        if parsed.get("action") == "create_booking":
-                            service = parsed["service"].lower()
-                            dt_str = parsed["datetime"]
-                            barber = parsed["barber"]
-                            notes = parsed.get("notes", "") or ""
-                            dt_obj = parse_date(dt_str)
+                    # 2️⃣ Автоматично разпознаване от текста
+                    service, barber, dt_obj = extract_info(user_text, services)
 
-                            if not dt_obj:
-                                send_message(psid, "🤔 Не разбрах точно датата — можеш ли да я потвърдиш? Например: 'следващия петък 15:00'")
-                                continue
-
-                            duration = services.get(service, {}).get("duration", 30)
-                            update_clients(psid, user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), notes)
-                            append_history(user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), notes, psid)
-                            create_event(user_name, service, barber, dt_obj, duration, notes)
-
-                            confirm = (
-                                f"✅ Резервацията е потвърдена, {user_name}! 💈\n"
-                                f"{dt_obj.strftime('%A, %d %B %Y %H:%M')} при {barber.title()} за {service.title()} ✂️\n"
-                                f"Бележка: {notes if notes else 'няма'}\n"
-                                f"Благодарим, че избра нашия салон! 🙏\n\n"
-                                f"Знаеше ли, че брадата на човек расте средно с около 14 см на година? 😄"
-                            )
-                            send_message(psid, confirm)
-                            conversations.pop(psid, None)
-                            continue
-                    except Exception as err:
-                        print("⚠️ JSON parse error:", err)
-                        send_message(psid, "Изглежда нещо не беше разбрано — можеш ли да повториш по-просто? 🙂")
+                    if service and dt_obj:
+                        duration = services[service]["duration"]
+                        update_clients(psid, user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), "")
+                        append_history(user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), "", psid)
+                        create_event(user_name, service, barber, dt_obj, duration, "")
+                        confirm = (
+                            f"✅ Записах те за {service.title()} при {barber or 'свободен майстор'} "
+                            f"на {dt_obj.strftime('%A, %d %B %Y %H:%M')} 💈\n"
+                            "Благодаря, че избра нашия салон! 🙏"
+                        )
+                        send_message(psid, confirm)
+                        conversations.pop(psid, None)
                         continue
 
-                    send_message(psid, reply)
     except Exception as e:
         print("❌ Error:", e)
     return {"status": "ok"}
