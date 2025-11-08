@@ -6,7 +6,7 @@ from utils.helpers import send_message, get_user_name
 from gapi.sheets import get_services, update_clients, append_history
 from gapi.calendar import create_event
 from ai.chat import generate_reply
-from utils.date_utils import parse_human_date
+# from utils.date_utils import parse_human_date
 
 app = FastAPI()
 
