@@ -42,10 +42,9 @@ def get_services():
     values = sheet.get("values", [])
     return {r[0].lower(): {"price": r[1], "duration": r[2]} for r in values if len(r) >= 3}
 
-def create_event(service_name, user_name="Messenger клиент"):
-    now = datetime.utcnow()
-    start = now + timedelta(minutes=5)
-    end = start + timedelta(minutes=30)
+def create_event(service_name, start_time, duration=30, user_name="Messenger клиент"):
+    start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
+    end = start + timedelta(minutes=duration)
     event = {
         "summary": f"{user_name} – {service_name}",
         "start": {"dateTime": start.isoformat() + "Z"},
@@ -57,15 +56,29 @@ def create_event(service_name, user_name="Messenger клиент"):
 def ask_gpt(messages):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+
+    # динамично зареждане на услугите
+    services = get_services()
+    services_text = "\n".join([
+        f"- {k.title()} ({v['price']} лв / {v['duration']} мин)"
+        for k, v in services.items()
+    ])
+
     system_prompt = {
         "role": "system",
-        "content": """You are SecretarBOT — a funny, friendly barber assistant.
-You help users book barber services naturally (haircuts, beards, combos).
+        "content": f"""You are SecretarBOT — a funny, friendly barber assistant.
+You help users book barber services based on the list below.
+Available services:
+{services_text}
+
 Ask for missing info step by step (service, time/date, barber).
 When all info is known, confirm the booking clearly, then tell a fun or curious fact related to hair, beards, or humans.
 Never record or save the fact anywhere — just say it.
-Always sound cheerful, confident and humorous."""
+Always sound cheerful, confident and humorous.
+If the user confirms the booking, respond with a JSON object like:
+{{"action": "create_booking", "service": "подстригване", "datetime": "2025-11-09 15:00"}}"""
     }
+
     payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
     r = requests.post(url, headers=headers, json=payload)
     return r.json()["choices"][0]["message"]["content"]
@@ -82,7 +95,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6 PRO test build active"}
+    return {"status": "ok", "message": "SecretarBOT v6.1 dynamic version active"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -95,22 +108,26 @@ async def webhook(request: Request):
                     psid = msg["sender"]["id"]
                     user_text = msg["message"]["text"]
 
-                    # context memory
                     if psid not in conversations:
                         conversations[psid] = []
                     conversations[psid].append({"role": "user", "content": user_text})
 
-                    # ask GPT
                     reply = ask_gpt(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # try to detect service keyword for quick test
-                    services = get_services()
-                    for s in services.keys():
-                        if s in user_text.lower():
-                            link = create_event(s)
-                            reply += f"\n\n✅ Записах те за {s}! Виж събитието тук: {link}"
-                            break
+                    # Проверка дали GPT е върнал JSON за резервация
+                    try:
+                        parsed = json.loads(reply)
+                        if isinstance(parsed, dict) and parsed.get("action") == "create_booking":
+                            service = parsed["service"]
+                            dt = parsed["datetime"]
+                            services = get_services()
+                            duration = int(services.get(service.lower(), {}).get("duration", 30))
+                            link = create_event(service, dt, duration)
+                            send_message(psid, f"✅ Записах те за {service} ({dt}). Виж събитието тук: {link}")
+                            continue
+                    except Exception:
+                        pass
 
                     send_message(psid, reply)
     except Exception as e:
