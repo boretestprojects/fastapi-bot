@@ -28,16 +28,15 @@ Never save or reuse the fact — it’s just for fun.
 """
     }
 
-url = "https://api.openai.com/v1/chat/completions"
-headers = {
-    "Authorization": f"Bearer {OPENAI_API_KEY}",
-    "Content-Type": "application/json"
-}
-payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
 
-r = requests.post(url, headers=headers, json=payload)
-r.raise_for_status()
-content = r.json()["choices"][0]["message"]["content"]
-print("🤖 GPT reply:", content)
-return content
-
+    r = requests.post(url, headers=headers, json=payload)
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    print("🤖 GPT reply:", content)
+    return content
