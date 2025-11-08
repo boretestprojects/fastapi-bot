@@ -18,7 +18,7 @@ app = FastAPI()
 
 VERIFY_TOKEN = "barberbot_verify_token"
 
-# 🧠 памет за разговори (в RAM)
+# 🧠 Памет за разговори (в RAM)
 conversations = {}
 
 # ===== ROOT & VERIFY =====
@@ -46,16 +46,16 @@ async def webhook(request: Request):
                     psid = msg["sender"]["id"]
                     user_text = msg["message"]["text"]
 
-                    # добавяме история на разговора
+                    # 💬 Добавяме история на разговора
                     if psid not in conversations:
                         conversations[psid] = []
                     conversations[psid].append({"role": "user", "content": user_text})
 
-                    # 🎯 AI отговор
+                    # 🧠 AI отговор
                     reply = generate_reply(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # проверка дали GPT е върнал JSON за резервация
+                    # 🔍 Проверка дали GPT е върнал JSON за резервация
                     try:
                         parsed = json.loads(reply)
                         if isinstance(parsed, dict) and parsed.get("action") == "create_booking":
@@ -64,31 +64,31 @@ async def webhook(request: Request):
                             barber = parsed.get("barber")
                             notes = parsed.get("notes", "")
 
-                            # 🔢 валидираме дата/час
+                            # 📅 Валидираме дата/час
                             dt = parse_human_date(dt_raw)
                             if not dt:
                                 send_message(psid, "Хмм... не съм сигурен кога точно искаш. Може ли да ми кажеш точния ден и час? 🙂")
                                 continue
 
-                            # 🧾 данни за услугата
+                            # 🧾 Данни за услугата
                             services = get_services()
                             duration = int(services.get(service.lower(), {}).get("duration", 30))
 
-                            # 🧑‍🦱 клиентско име
+                            # 👤 Име на клиента
                             user_name = get_user_name(psid)
 
                             # 🗓️ Създаваме събитие в Google Calendar
                             event_link = create_event(service, dt, duration, user_name, barber, notes)
 
                             if not event_link:
-                                send_message(psid, f"⚠️ {barber} не е на смяна тогава. Избери друг ден или бръснар 🙂")
+                                send_message(psid, f"⚠️ {barber} не е на смяна тогава. Избери друг ден или друг бръснар 🙂")
                                 continue
 
-                            # 🧾 Запис в Sheets (Clients + History)
+                            # ✍️ Запис в Sheets (Clients + History)
                             update_clients(psid, user_name, service, barber, dt, notes)
                             append_history(user_name, service, barber, dt, notes, psid)
 
-                            # 🎉 Потвърждение с забавен факт
+                            # 🎉 Потвърждение с „fun fact“
                             confirmation = (
                                 f"✅ Записах те за {service} при {barber} на {dt.strftime('%A, %d %B %Y %H:%M')}.\n"
                                 f"Ще се радваме да те видим, {user_name}! 💈✂️\n\n"
@@ -101,7 +101,7 @@ async def webhook(request: Request):
                     except json.JSONDecodeError:
                         pass
 
-                    # ако не е JSON → просто изпращаме отговора
+                    # Ако не е JSON → просто изпращаме отговора
                     send_message(psid, reply)
 
         return {"status": "ok"}
