@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import pytz
+from dateutil import parser as dateparser
 
 # ===== CONFIG =====
 VERIFY_TOKEN = "barberbot_verify_token"
@@ -28,7 +29,7 @@ creds = service_account.Credentials.from_service_account_info(
 sheets_service = build("sheets", "v4", credentials=creds)
 calendar_service = build("calendar", "v3", credentials=creds)
 
-# ===== CONVERSATION MEMORY =====
+# ===== MEMORY =====
 conversations = {}
 
 # ===== HELPERS =====
@@ -44,21 +45,21 @@ def get_user_name(psid):
         r = requests.get(url, params=params).json()
         return f"{r.get('first_name','')} {r.get('last_name','')}".strip()
     except:
-        return "Messenger client"
+        return "Messenger клиент"
 
 def get_sheet_range(tab):
-    return sheets_service.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=f"{tab}!A2:Z").execute().get("values", [])
+    return sheets_service.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range=f"{tab}!A2:Z"
+    ).execute().get("values", [])
 
 def get_services():
     rows = get_sheet_range("Services")
     services = {}
-    headers = ["Service", "Price", "Duration"]
     for r in rows:
         if len(r) >= 3:
-            name = r[0].strip().lower()
-            services[name] = {
+            services[r[0].strip().lower()] = {
                 "price": r[1],
-                "duration": int(r[2]) if r[2].isdigit() else 30
+                "duration": int(r[2]) if r[2].isdigit() else 30,
             }
     return services
 
@@ -71,7 +72,7 @@ def get_barbers():
                 "days": r[1],
                 "start": r[2],
                 "end": r[3],
-                "restricted": r[4] if len(r) > 4 else ""
+                "restricted": r[4] if len(r) > 4 else "",
             }
     return barbers
 
@@ -96,6 +97,7 @@ def update_clients(psid, name, service, barber, dt, notes):
             valueInputOption="RAW",
             body={"values": [[psid, name, service, barber, dt, notes]]},
         ).execute()
+    print("🧾 Client saved to sheet:", name, service, barber, dt)
 
 def append_history(name, service, barber, dt, notes, psid):
     sheets_service.spreadsheets().values().append(
@@ -104,19 +106,20 @@ def append_history(name, service, barber, dt, notes, psid):
         valueInputOption="RAW",
         body={"values": [[dt, name, service, barber, notes, psid]]},
     ).execute()
+    print("📜 History appended:", name, dt)
 
 def parse_date(dt_str):
     try:
-        if "T" in dt_str:
-            dt = datetime.fromisoformat(dt_str.replace("Z", ""))
-        else:
-            dt = datetime.strptime(dt_str, "%A, %d %B %Y at %H:%M")
+        dt = dateparser.parse(dt_str)
+        if not dt:
+            return None
         dt = TIMEZONE.localize(dt)
         if dt < datetime.now(TIMEZONE):
             dt += timedelta(days=7)
+        print("🟢 Parsed date:", dt)
         return dt
-    except Exception:
-        print(f"❌ Date parse failed for '{dt_str}'")
+    except Exception as e:
+        print("❌ Date parse failed:", e)
         return None
 
 def create_event(name, service, barber, dt_obj, duration, notes):
@@ -130,34 +133,37 @@ def create_event(name, service, barber, dt_obj, duration, notes):
         "end": {"dateTime": end_dt.isoformat()},
     }
     calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+    print("📅 Calendar event created:", dt_obj)
     return True
-
-def extract_notes(text):
-    m = re.findall(r"(?:може|ще|навярно|вероятно).{0,30}", text, re.IGNORECASE)
-    return m[0] if m else ""
 
 def ask_gpt(messages, services_text, barbers_text):
     system_prompt = {
         "role": "system",
-        "content": f"""You are SecretarBOT — a funny and friendly barber assistant 💈😄
-You help clients book services step by step (service, date/time, barber).
-When all info is ready, confirm booking clearly, then end with a fun fact about hair or humans.
-Always stay cheerful, casual, and a bit humorous.
-Always generate future dates relative to today (never in the past).
+        "content": f"""You are SecretarBOT — a friendly barber assistant 💈
+Help users book hair & beard services.
+Ask step by step: service, date/time, barber, notes.
+When all info is ready, reply **only with pure JSON**, nothing else.
+Always produce future dates (never past).
 Available services:
 {services_text}
-
 Available barbers:
 {barbers_text}
-
-If the user confirms booking, respond in JSON:
-{{"action": "create_booking", "service": "...", "datetime": "...", "barber": "...", "notes": "..."}}"""
+Format example:
+{{"action":"create_booking","service":"Herreklipp","datetime":"2025-11-09T15:00:00Z","barber":"Ivan","notes":"може да закъснея с 5 мин"}}"""
     }
-    payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
-    r = requests.post("https://api.openai.com/v1/chat/completions",
-                      headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                               "Content-Type": "application/json"},
-                      json=payload).json()
+    payload = {
+        "model": "gpt-4o",
+        "messages": [system_prompt] + messages,
+        "temperature": 0.3,
+    }
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    ).json()
     return r["choices"][0]["message"]["content"]
 
 # ===== WEBHOOK VERIFY =====
@@ -172,7 +178,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6.4.1 PRO (Date & Sheets Fix Edition) active"}
+    return {"status": "ok", "message": "SecretarBOT v6.4.2 PRO (Safe JSON + Date Fix) active"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -193,39 +199,48 @@ async def webhook(request: Request):
                     services = get_services()
                     barbers = get_barbers()
 
-                    services_text = "\n".join([f"- {k.title()} ({v['price']} NOK, {v['duration']} min)" for k, v in services.items()])
-                    barbers_text = "\n".join([f"- {k.title()} ({v['days']} {v['start']}-{v['end']})" for k, v in barbers.items()])
+                    services_text = "\n".join(
+                        [f"- {k.title()} ({v['price']} NOK, {v['duration']} min)" for k, v in services.items()]
+                    )
+                    barbers_text = "\n".join(
+                        [f"- {k.title()} ({v['days']} {v['start']}-{v['end']})" for k, v in barbers.items()]
+                    )
 
                     reply = ask_gpt(conversations[psid], services_text, barbers_text)
+                    print("🤖 GPT replied:", reply)
 
                     try:
                         parsed = json.loads(reply)
                         if parsed.get("action") == "create_booking":
                             service = parsed["service"].lower()
-                            dt = parsed["datetime"]
+                            dt_str = parsed["datetime"]
                             barber = parsed["barber"]
-                            notes = parsed.get("notes", "") or extract_notes(user_text)
-                            dt_obj = parse_date(dt)
+                            notes = parsed.get("notes", "") or ""
+                            dt_obj = parse_date(dt_str)
 
                             if not dt_obj:
-                                send_message(psid, "🤔 Не разбрах точно датата. Можеш ли да я потвърдиш, например ‘следващия петък 15:00’? 🙂")
+                                send_message(psid, "🤔 Не разбрах точно датата — можеш ли да я потвърдиш? Например: 'следващия петък 15:00'")
                                 continue
 
                             duration = services.get(service, {}).get("duration", 30)
-                            update_clients(psid, user_name, service, barber, dt_obj.strftime("%A, %d %B %Y at %H:%M"), notes)
-                            append_history(user_name, service, barber, dt_obj.strftime("%A, %d %B %Y at %H:%M"), notes, psid)
+                            update_clients(psid, user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), notes)
+                            append_history(user_name, service, barber, dt_obj.strftime("%A, %d %B %Y %H:%M"), notes, psid)
                             create_event(user_name, service, barber, dt_obj, duration, notes)
 
-                            confirm = (f"✅ Резервацията е потвърдена, {user_name}! 💈\n"
-                                       f"{dt_obj.strftime('%A, %d %B %Y at %H:%M')} при {barber.title()} за {service.title()} ✂️\n"
-                                       f"Бележка: {notes if notes else 'няма'}\n"
-                                       f"Благодарим, че избра нашия салон! 🙏\n\n"
-                                       f"Знаеше ли, че човешката коса може да издържи до 100 грама тежест? 😄")
+                            confirm = (
+                                f"✅ Резервацията е потвърдена, {user_name}! 💈\n"
+                                f"{dt_obj.strftime('%A, %d %B %Y %H:%M')} при {barber.title()} за {service.title()} ✂️\n"
+                                f"Бележка: {notes if notes else 'няма'}\n"
+                                f"Благодарим, че избра нашия салон! 🙏\n\n"
+                                f"Знаеше ли, че брадата на човек расте средно с около 14 см на година? 😄"
+                            )
                             send_message(psid, confirm)
                             conversations.pop(psid, None)
                             continue
                     except Exception as err:
-                        print(f"⚠️ Parse error or invalid JSON: {err}")
+                        print("⚠️ JSON parse error:", err)
+                        send_message(psid, "Изглежда нещо не беше разбрано — можеш ли да повториш по-просто? 🙂")
+                        continue
 
                     send_message(psid, reply)
     except Exception as e:
