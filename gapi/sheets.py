@@ -1,36 +1,28 @@
-import os, json
+import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-
 creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
 creds = service_account.Credentials.from_service_account_info(
     creds_data,
     scopes=["https://www.googleapis.com/auth/spreadsheets"]
 )
-sheets_service = build("sheets", "v4", credentials=creds)
+service = build("sheets", "v4", credentials=creds)
 
 def get_services():
-    data = sheets_service.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID, range="Services!A2:C"
-    ).execute().get("values", [])
-    return {r[0].lower(): {"price": r[1], "duration": int(r[2]) if len(r) > 2 else 30} for r in data}
+    result = service.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Services!A2:C").execute()
+    values = result.get("values", [])
+    return {r[0].lower(): {"price": r[1], "duration": r[2]} for r in values if len(r) >= 3}
 
-def update_clients(psid, name, service, barber, dt, notes):
-    body = {"values": [[psid, name, service, barber, dt, notes]]}
-    sheets_service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range="Clients!A:F",
-        valueInputOption="RAW",
-        body=body
-    ).execute()
+def update_clients(psid, name, service_name, barber, date, notes):
+    body = {"values": [[psid, name, service_name, barber, date.strftime("%Y-%m-%d %H:%M"), notes]]}
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID, range="Clients!A2",
+        valueInputOption="USER_ENTERED", body=body).execute()
 
-def append_history(name, service, barber, dt, notes, psid):
-    body = {"values": [[dt, name, service, barber, notes, psid]]}
-    sheets_service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range="History!A:F",
-        valueInputOption="RAW",
-        body=body
-    ).execute()
+def append_history(name, service_name, barber, date, notes, psid):
+    body = {"values": [[date.strftime("%Y-%m-%d %H:%M"), name, service_name, barber, notes, psid]]}
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID, range="History!A2",
+        valueInputOption="USER_ENTERED", body=body).execute()
