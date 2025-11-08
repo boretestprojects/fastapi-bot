@@ -14,7 +14,7 @@ CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID")
 
 app = FastAPI()
 
-# ===== GOOGLE AUTH (използва ENV вместо credentials.json файл) =====
+# ===== GOOGLE AUTH (чете от ENV, не от файл) =====
 creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
 creds = service_account.Credentials.from_service_account_info(
     creds_data,
@@ -49,27 +49,53 @@ def get_barbers():
         range="Barbers!A2:C"
     ).execute()
     values = sheet.get("values", [])
-    return [{"name": r[0], "days": r[1], "specialty": r[2]} for r in values if len(r) >= 3]
+    return [{"name": r[0], "days": r[1].lower(), "specialty": r[2]} for r in values if len(r) >= 3]
+
+def is_barber_available(barber_name):
+    barbers = get_barbers()
+    today_day = datetime.utcnow().strftime("%a").lower()  # Mon, Tue...
+    for b in barbers:
+        if barber_name.lower() in b["name"].lower():
+            if today_day[:3] in b["days"].lower():
+                return True
+    return False
 
 def create_event(service_name, start_time, duration=30, user_name="Messenger клиент", barber=None):
-    start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
-    end = start + timedelta(minutes=duration)
-    summary = f"{user_name} – {service_name}"
-    if barber:
-        summary += f" ({barber})"
-    event = {
-        "summary": summary,
-        "start": {"dateTime": start.isoformat() + "Z"},
-        "end": {"dateTime": end.isoformat() + "Z"},
-    }
-    result = calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
-    return result.get("htmlLink")
+    try:
+        start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
+        # ако GPT върне минала дата → премести я утре в 13:00
+        if start < datetime.utcnow():
+            start = datetime.utcnow() + timedelta(days=1)
+            start = start.replace(hour=13, minute=0, second=0, microsecond=0)
+
+        # проверка дали бръснарят е на работа днес
+        if barber and not is_barber_available(barber):
+            print(f"⚠️ {barber} не е по график днес.")
+            return None
+
+        end = start + timedelta(minutes=duration)
+        summary = f"{user_name} – {service_name}"
+        if barber:
+            summary += f" ({barber})"
+
+        event = {
+            "summary": summary,
+            "start": {"dateTime": start.isoformat() + "Z"},
+            "end": {"dateTime": end.isoformat() + "Z"},
+        }
+
+        result = calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+        print(f"✅ Google Calendar event created: {result.get('htmlLink')}")
+        return result.get("htmlLink")
+
+    except Exception as e:
+        print(f"❌ Calendar error: {e}")
+        return None
 
 def ask_gpt(messages):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
-    # === Динамично четене на услуги и бръснари ===
     services = get_services()
     barbers = get_barbers()
 
@@ -91,6 +117,7 @@ Available services:
 Available barbers:
 {barbers_text}
 
+Always prefer upcoming future times, never suggest past dates.
 Ask for missing info step by step (service, date/time, barber).
 When all info is known, confirm the booking clearly,
 then tell a funny or interesting fact related to hair, beards, or humans.
@@ -102,7 +129,9 @@ If the user confirms the booking, respond in JSON like:
 
     payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
     r = requests.post(url, headers=headers, json=payload)
-    return r.json()["choices"][0]["message"]["content"]
+    result = r.json()["choices"][0]["message"]["content"]
+    print(f"🤖 GPT replied: {result}")
+    return result
 
 # ===== WEBHOOK VERIFY =====
 @app.get("/webhook")
@@ -116,7 +145,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6.2 dynamic version (services + barbers)"}
+    return {"status": "ok", "message": "SecretarBOT v6.3 — dynamic version (auto dates + schedule check)"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -136,7 +165,6 @@ async def webhook(request: Request):
                     reply = ask_gpt(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # Проверка дали GPT е върнал JSON
                     try:
                         parsed = json.loads(reply)
                         if isinstance(parsed, dict) and parsed.get("action") == "create_booking":
@@ -146,7 +174,10 @@ async def webhook(request: Request):
                             services = get_services()
                             duration = int(services.get(service.lower(), {}).get("duration", 30))
                             link = create_event(service, dt, duration, barber=barber)
-                            send_message(psid, f"✅ Записах те за {service} при {barber} ({dt}). Виж събитието тук: {link}")
+                            if link:
+                                send_message(psid, f"✅ Записах те за {service} при {barber} ({dt}). Виж събитието тук: {link}")
+                            else:
+                                send_message(psid, f"⚠️ {barber} не е по график в този ден. Избери друг ден или друг бръснар 🙂")
                             continue
                     except Exception:
                         pass
