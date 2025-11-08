@@ -1,0 +1,7 @@
+{
+  "VERIFY_TOKEN": "your_verify_token_here",
+  "PAGE_ACCESS_TOKEN": "your_facebook_page_token_here",
+  "OPENAI_API_KEY": "your_openai_key_here",
+  "GOOGLE_SHEET_ID": "your_google_sheet_id_here",
+  "GOOGLE_CALENDAR_ID": "your_google_calendar_id_here"
+}
