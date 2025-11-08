@@ -57,8 +57,9 @@ def is_barber_available(barber_name: str, dt: datetime, service_name: str):
         name, work_days, start, end = row[:4]
         restricted = row[4] if len(row) > 4 else ""
 
+        # 🧩 проверка на име, ден, час и ограничения
         if barber_name.lower() in name.lower():
-            if day[:3] not in work_days:
+            if day[:3].lower() not in work_days.lower():
                 return False
             if not (start <= time_str <= end):
                 return False
