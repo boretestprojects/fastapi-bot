@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
-import requests, os, json
+import requests, os, json, re
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import pytz
 
 # ===== CONFIG =====
 VERIFY_TOKEN = "barberbot_verify_token"
@@ -11,17 +12,18 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID")
+TIMEZONE = pytz.timezone("Europe/Oslo")
 
 app = FastAPI()
 
-# ===== GOOGLE AUTH (чете от ENV, не от файл) =====
+# ===== GOOGLE AUTH =====
 creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
 creds = service_account.Credentials.from_service_account_info(
     creds_data,
     scopes=[
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/calendar"
-    ]
+        "https://www.googleapis.com/auth/calendar",
+    ],
 )
 sheets_service = build("sheets", "v4", credentials=creds)
 calendar_service = build("calendar", "v3", credentials=creds)
@@ -35,103 +37,111 @@ def send_message(psid, text):
     payload = {"recipient": {"id": psid}, "message": {"text": text}}
     requests.post(url, json=payload)
 
+def get_user_name(psid):
+    url = f"https://graph.facebook.com/{psid}"
+    params = {"fields": "first_name,last_name", "access_token": PAGE_ACCESS_TOKEN}
+    try:
+        r = requests.get(url, params=params).json()
+        return f"{r.get('first_name','')} {r.get('last_name','')}".strip()
+    except:
+        return "Messenger client"
+
+def get_sheet_range(tab):
+    return sheets_service.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=f"{tab}!A2:Z").execute().get("values", [])
+
 def get_services():
-    sheet = sheets_service.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID,
-        range="Services!A2:C"
-    ).execute()
-    values = sheet.get("values", [])
-    return {r[0].lower(): {"price": r[1], "duration": r[2]} for r in values if len(r) >= 3}
+    rows = get_sheet_range("Services")
+    services = {}
+    for r in rows:
+        if len(r) >= 3:
+            services[r[0].strip().lower()] = {
+                "price": r[1],
+                "duration": r[2],
+                "allowed": {h.lower(): v for h, v in zip(rows[0][3:], r[3:])}
+            }
+    return services
 
 def get_barbers():
-    sheet = sheets_service.spreadsheets().values().get(
+    rows = get_sheet_range("Barbers")
+    barbers = {}
+    for r in rows:
+        if len(r) >= 4:
+            barbers[r[0].strip().lower()] = {
+                "days": r[1],
+                "start": r[2],
+                "end": r[3],
+                "restricted": r[4] if len(r) > 4 else ""
+            }
+    return barbers
+
+def update_clients(psid, name, service, barber, dt, notes):
+    values = get_sheet_range("Clients")
+    sheet = sheets_service.spreadsheets()
+    found = False
+    for i, row in enumerate(values, start=2):
+        if len(row) > 0 and row[0] == psid:
+            found = True
+            sheet.values().update(
+                spreadsheetId=SHEET_ID,
+                range=f"Clients!A{i}:F{i}",
+                valueInputOption="RAW",
+                body={"values": [[psid, name, service, barber, dt, notes]]},
+            ).execute()
+            break
+    if not found:
+        sheet.values().append(
+            spreadsheetId=SHEET_ID,
+            range="Clients!A:F",
+            valueInputOption="RAW",
+            body={"values": [[psid, name, service, barber, dt, notes]]},
+        ).execute()
+
+def append_history(name, service, barber, dt, notes, psid):
+    sheets_service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
-        range="Barbers!A2:C"
+        range="History!A:F",
+        valueInputOption="RAW",
+        body={"values": [[dt, name, service, barber, notes, psid]]},
     ).execute()
-    values = sheet.get("values", [])
-    return [{"name": r[0], "days": r[1].lower(), "specialty": r[2]} for r in values if len(r) >= 3]
 
-def is_barber_available(barber_name):
-    barbers = get_barbers()
-    today_day = datetime.utcnow().strftime("%a").lower()  # Mon, Tue...
-    for b in barbers:
-        if barber_name.lower() in b["name"].lower():
-            if today_day[:3] in b["days"].lower():
-                return True
-    return False
+def create_event(name, service, barber, dt_str, notes):
+    start_dt = datetime.strptime(dt_str, "%A, %d %B %Y at %H:%M")
+    start_dt = TIMEZONE.localize(start_dt)
+    end_dt = start_dt + timedelta(minutes=30)
+    event = {
+        "summary": f"{name} – {service} ({barber})",
+        "description": f"Notes: {notes}",
+        "start": {"dateTime": start_dt.isoformat()},
+        "end": {"dateTime": end_dt.isoformat()},
+    }
+    calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
 
-def create_event(service_name, start_time, duration=30, user_name="Messenger клиент", barber=None):
-    try:
-        start = datetime.strptime(start_time, "%Y-%m-%d %H:%M")
-        # ако GPT върне минала дата → премести я утре в 13:00
-        if start < datetime.utcnow():
-            start = datetime.utcnow() + timedelta(days=1)
-            start = start.replace(hour=13, minute=0, second=0, microsecond=0)
+def extract_notes(text):
+    m = re.findall(r"(?:може|ще|навярно|вероятно).{0,30}", text, re.IGNORECASE)
+    return m[0] if m else ""
 
-        # проверка дали бръснарят е на работа днес
-        if barber and not is_barber_available(barber):
-            print(f"⚠️ {barber} не е по график днес.")
-            return None
-
-        end = start + timedelta(minutes=duration)
-        summary = f"{user_name} – {service_name}"
-        if barber:
-            summary += f" ({barber})"
-
-        event = {
-            "summary": summary,
-            "start": {"dateTime": start.isoformat() + "Z"},
-            "end": {"dateTime": end.isoformat() + "Z"},
-        }
-
-        result = calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
-        print(f"✅ Google Calendar event created: {result.get('htmlLink')}")
-        return result.get("htmlLink")
-
-    except Exception as e:
-        print(f"❌ Calendar error: {e}")
-        return None
-
-def ask_gpt(messages):
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-
-    services = get_services()
-    barbers = get_barbers()
-
-    services_text = "\n".join([
-        f"- {k.title()} ({v['price']} лв / {v['duration']} мин)"
-        for k, v in services.items()
-    ])
-    barbers_text = "\n".join([
-        f"- {b['name']} (дни: {b['days']}, специалност: {b['specialty']})"
-        for b in barbers
-    ])
-
+def ask_gpt(messages, services_text, barbers_text):
     system_prompt = {
         "role": "system",
-        "content": f"""You are SecretarBOT — a friendly and funny barber assistant.
+        "content": f"""You are SecretarBOT — a funny and friendly barber assistant 💈😄
+You help clients book services step by step (service, date/time, barber).
+When all info is ready, confirm booking clearly, then end with a fun fact about hair or humans.
+Always stay cheerful, casual, and a bit humorous.
 Available services:
 {services_text}
 
 Available barbers:
 {barbers_text}
 
-Always prefer upcoming future times, never suggest past dates.
-Ask for missing info step by step (service, date/time, barber).
-When all info is known, confirm the booking clearly,
-then tell a funny or interesting fact related to hair, beards, or humans.
-Never record or save the fact anywhere — just say it.
-If the user confirms the booking, respond in JSON like:
-{{"action": "create_booking", "service": "подстригване", "datetime": "2025-11-09 15:00", "barber": "Миро"}}
-"""
+If the user confirms booking, respond in JSON:
+{{"action": "create_booking", "service": "...", "datetime": "...", "barber": "...", "notes": "..."}}"""
     }
-
     payload = {"model": "gpt-4o", "messages": [system_prompt] + messages}
-    r = requests.post(url, headers=headers, json=payload)
-    result = r.json()["choices"][0]["message"]["content"]
-    print(f"🤖 GPT replied: {result}")
-    return result
+    r = requests.post("https://api.openai.com/v1/chat/completions",
+                      headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                               "Content-Type": "application/json"},
+                      json=payload).json()
+    return r["choices"][0]["message"]["content"]
 
 # ===== WEBHOOK VERIFY =====
 @app.get("/webhook")
@@ -145,7 +155,7 @@ async def verify(request: Request):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v6.3 — dynamic version (auto dates + schedule check)"}
+    return {"status": "ok", "message": "SecretarBOT v6.4 PRO Friendly Edition active"}
 
 # ===== MAIN WEBHOOK =====
 @app.post("/webhook")
@@ -157,27 +167,40 @@ async def webhook(request: Request):
                 if "message" in msg and "text" in msg["message"]:
                     psid = msg["sender"]["id"]
                     user_text = msg["message"]["text"]
+                    user_name = get_user_name(psid)
 
                     if psid not in conversations:
                         conversations[psid] = []
                     conversations[psid].append({"role": "user", "content": user_text})
 
-                    reply = ask_gpt(conversations[psid])
-                    conversations[psid].append({"role": "assistant", "content": reply})
+                    services = get_services()
+                    barbers = get_barbers()
+
+                    services_text = "\n".join([f"- {k.title()} ({v['price']} NOK, {v['duration']} min)" for k, v in services.items()])
+                    barbers_text = "\n".join([f"- {k.title()} ({v['days']} {v['start']}-{v['end']})" for k, v in barbers.items()])
+
+                    reply = ask_gpt(conversations[psid], services_text, barbers_text)
 
                     try:
                         parsed = json.loads(reply)
-                        if isinstance(parsed, dict) and parsed.get("action") == "create_booking":
+                        if parsed.get("action") == "create_booking":
                             service = parsed["service"]
                             dt = parsed["datetime"]
-                            barber = parsed.get("barber")
-                            services = get_services()
-                            duration = int(services.get(service.lower(), {}).get("duration", 30))
-                            link = create_event(service, dt, duration, barber=barber)
-                            if link:
-                                send_message(psid, f"✅ Записах те за {service} при {barber} ({dt}). Виж събитието тук: {link}")
-                            else:
-                                send_message(psid, f"⚠️ {barber} не е по график в този ден. Избери друг ден или друг бръснар 🙂")
+                            barber = parsed["barber"]
+                            notes = parsed.get("notes", "") or extract_notes(user_text)
+
+                            # Record client + history + calendar
+                            update_clients(psid, user_name, service, barber, dt, notes)
+                            append_history(user_name, service, barber, dt, notes, psid)
+                            create_event(user_name, service, barber, dt, notes)
+
+                            confirm = (f"✅ Резервацията е потвърдена, {user_name}! 💈\n"
+                                       f"{dt} при {barber.title()} за {service.title()} ✂️\n"
+                                       f"Бележка: {notes if notes else 'няма'}\n"
+                                       f"Благодарим, че избра нашия салон! 🙏\n\n"
+                                       f"Знаеше ли, че човешката коса може да издържи до 100 грама тежест? 😄")
+                            send_message(psid, confirm)
+                            conversations.pop(psid, None)
                             continue
                     except Exception:
                         pass
