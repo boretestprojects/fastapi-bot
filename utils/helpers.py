@@ -1,4 +1,4 @@
-import requests, os
+import random, requests, os
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
@@ -8,10 +8,20 @@ def send_message(psid, text):
     requests.post(url, json=payload)
 
 def get_user_name(psid):
-    url = f"https://graph.facebook.com/{psid}"
-    params = {"fields": "first_name,last_name", "access_token": PAGE_ACCESS_TOKEN}
-    try:
-        r = requests.get(url, params=params).json()
-        return f"{r.get('first_name','')} {r.get('last_name','')}".strip()
-    except:
-        return "Messenger клиент"
+    # може да се доразвие с реално извличане на името от Graph API
+    return "Messenger клиент"
+
+def random_fun_fact():
+    facts = [
+        "Знаете ли, че косата расте с около 1 см на месец?",
+        "Брадата на средностатистически мъж расте 140 мм годишно!",
+        "Косата ви може да издържи товар от 100 грама на кичур!",
+        "Дългата коса е била символ на сила още от времето на Самсон!",
+        "Най-старият известен бръснарски магазин е основан през 1805 г. в Лондон!",
+        "Косата продължава да расте и след смъртта... или поне така изглежда, защото кожата се свива!",
+        "Бръснарите в Средновековието били и хирурзи – подстригвали и вадели зъби!",
+        "Средностатистически човек има между 100 000 и 150 000 косъма!",
+        "Русата коса съдържа най-много космени фоликули, черната – най-плътни!",
+        "Една коса живее средно 5 години преди да падне естествено.",
+    ]
+    return random.choice(facts)
