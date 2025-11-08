@@ -4,7 +4,11 @@ import pytz
 
 TIMEZONE = pytz.timezone("Europe/Oslo")
 
-def parse_date_from_text(text):
+def parse_human_date(text: str) -> str:
+    """
+    Разпознава естествени изрази за дати (напр. 'утре в 15:00', 'Monday 13:30', '9 November 2025')
+    и връща ISO формат (стринг).
+    """
     try:
         dt = dateparser.parse(
             text,
@@ -18,10 +22,9 @@ def parse_date_from_text(text):
         )
         if dt and dt < datetime.now(TIMEZONE):
             dt += timedelta(days=7)
-        return dt
+        return dt.isoformat()
     except Exception as e:
         print("❌ Date parse error:", e)
-
-    fallback = datetime.now(TIMEZONE) + timedelta(days=1)
-    fallback = fallback.replace(hour=13, minute=0, second=0, microsecond=0)
-    return fallback
+        fallback = datetime.now(TIMEZONE) + timedelta(days=1)
+        fallback = fallback.replace(hour=13, minute=0, second=0, microsecond=0)
+        return fallback.isoformat()
