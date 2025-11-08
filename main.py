@@ -1,3 +1,9 @@
+import sys
+import site
+for p in site.getsitepackages():
+    if "site-packages" in p:
+        sys.path.append(p)
+
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 import os, json, traceback
