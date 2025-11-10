@@ -15,7 +15,7 @@ conversations = {}
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "message": "SecretarBOT v9 – Stable Understanding Edition"}
+    return {"status": "ok", "message": "SecretarBOT v9 – Stable Booking Edition"}
 
 @app.get("/webhook")
 async def verify(request: Request):
@@ -34,18 +34,18 @@ async def webhook(request: Request):
             for msg in entry.get("messaging", []):
                 if "message" in msg and "text" in msg["message"]:
                     psid = msg["sender"]["id"]
-                    user_text = msg["message"]["text"]
+                    user_text = msg["message"]["text"].strip()
 
-                    # 🧠 памет за разговор
+                    # 🧠 Запис в разговорната памет
                     if psid not in conversations:
                         conversations[psid] = []
                     conversations[psid].append({"role": "user", "content": user_text})
 
-                    # 🤖 AI отговор
+                    # 🤖 Генерираме AI отговор
                     reply = generate_reply(conversations[psid])
                     conversations[psid].append({"role": "assistant", "content": reply})
 
-                    # 🔍 търсим JSON структура (дори ако GPT е добавил текст)
+                    # 🔍 Проверка за JSON структура в отговора
                     match = re.search(r'\{[^{}]*"action"\s*:\s*"create_booking"[^{}]*\}', reply)
                     if match:
                         try:
@@ -59,59 +59,64 @@ async def webhook(request: Request):
                         barber = parsed.get("barber")
                         notes = parsed.get("notes", "")
 
-                        # 🧾 проверка дали всички полета са налични
+                        # 🧾 Проверяваме дали има нужните данни
                         if not all([service, dt_raw, barber]):
                             send_message(psid, "Хмм... липсва информация (услуга, дата или бръснар). Може ли пак?")
                             continue
 
-                        # 📅 валидираме и конвертираме дата
+                        # 📅 Валидираме и конвертираме дата
                         dt = parse_human_date(dt_raw)
                         if not dt:
                             send_message(psid, "Не съм сигурен коя дата имаш предвид. Може ли точен ден и час?")
                             continue
 
-                        # ⏰ проверяваме графика на бръснаря
+                        # 🧭 Проверка дали бръснарят е на работа
                         if not is_barber_available(barber, dt, service):
                             send_message(psid, f"⚠️ {barber} не е на работа по това време. Избери друг ден или бръснар 🙂")
                             continue
 
-                        # ✅ всичко е готово → питаме за потвърждение
+                        # ✅ Потвърждение преди запис
                         confirm_msg = (
                             f"Да потвърдя ли: {service} при {barber} на {dt.strftime('%A, %d %B %Y %H:%M')}? "
-                            f"Отговори с „да“ за потвърждение. 💈"
+                            f"Отговори с „да“, „ок“ или „yes“ за потвърждение. 💈"
                         )
                         send_message(psid, confirm_msg)
 
-                        # запазваме детайли в паметта
+                        # 💾 Запазваме pending резервация (datetime като текст)
                         conversations[psid].append({
                             "role": "system",
-                            "pending_booking": {"service": service, "barber": barber, "datetime": dt, "notes": notes}
+                            "pending_booking": {
+                                "service": service,
+                                "barber": barber,
+                                "datetime": dt.isoformat(),  # ✅ сериализирано безопасно
+                                "notes": notes
+                            }
                         })
                         continue
 
-                    # 🟢 Потвърждение
-                    if user_text.strip().lower() in ["да", "yes", "ок", "potvurdavam", "confirm"]:
+                    # 💬 Потвърждение от потребителя
+                    if user_text.lower() in ["да", "yes", "ok", "ок", "potvurdavam", "confirm"]:
                         for item in reversed(conversations[psid]):
                             if isinstance(item, dict) and "pending_booking" in item:
                                 b = item["pending_booking"]
-                                dt = b["datetime"]
+                                from datetime import datetime
+                                dt = datetime.fromisoformat(b["datetime"])  # ✅ обратно към datetime
                                 service = b["service"]
                                 barber = b["barber"]
                                 notes = b.get("notes", "")
                                 user_name = get_user_name(psid)
 
-                                # Създаваме събитие
+                                # 🗓️ Създаване на събитие в Google Calendar
                                 event_link = create_event(service, dt, 30, user_name, barber, notes)
-
                                 if not event_link:
                                     send_message(psid, f"⚠️ {barber} не е на работа тогава. Опитай друг ден.")
                                     break
 
-                                # Запис в Sheets
+                                # 📋 Запис в Google Sheets
                                 update_clients(psid, user_name, service, barber, dt, notes)
                                 append_history(user_name, service, barber, dt, notes, psid)
 
-                                # Забавен факт
+                                # 🎉 Потвърждение + забавен факт
                                 fact = random_fun_fact()
                                 send_message(psid, (
                                     f"✅ Записах те за {service} при {barber} на {dt.strftime('%A, %d %B %Y %H:%M')}!\n"
@@ -120,7 +125,7 @@ async def webhook(request: Request):
                                 break
                         continue
 
-                    # ако не е JSON → просто изпращаме отговора
+                    # ако няма JSON → просто изпращаме отговора
                     send_message(psid, reply)
 
         return {"status": "ok"}
@@ -129,3 +134,8 @@ async def webhook(request: Request):
         print("❌ ERROR:", e)
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+@app.get("/debug/conversations")
+async def debug_conversations():
+    """Преглед на активните разговори"""
+    return conversations
