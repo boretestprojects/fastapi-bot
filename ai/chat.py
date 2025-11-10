@@ -5,7 +5,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 def generate_reply(history):
     services = get_services()
-    service_text = "\n".join([f"- {k.title()} ({v['price']} NOK / {v['duration']} мин)" for k,v in services.items()])
+    service_text = "\n".join([f"- {k.title()} ({v['price']} NOK / {v['duration']} мин)" for k, v in services.items()])
     barbers = ["Ivan", "Bore"]
 
     system_prompt = {
@@ -32,6 +32,30 @@ If unsure, ask short, polite question to clarify.
         "temperature": 0.4,
     }
 
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-    return r.json()["choices"][0]["message"]["content"]
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+        data = r.json()
+
+        # 🧩 Проверяваме дали има валидно съдържание
+        if "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"]
+
+        # ⚠️ Ако API върне грешка
+        elif "error" in data:
+            err_msg = data["error"].get("message", "Unknown error")
+            print(f"⚠️ OpenAI API Error: {err_msg}")
+            return "Извинявай, имам малък проблем с връзката към AI сървъра. Опитай пак след малко 🙂"
+
+        # 🪫 Неочакван отговор
+        else:
+            print(f"⚠️ Unexpected API response: {data}")
+            return "Хмм... нещо не се получи с отговора. Може ли да повториш?"
+
+    except Exception as e:
+        print("❌ OpenAI Request Error:", e)
+        return "Имаше временен проблем с връзката към AI услугата. Опитай пак след малко!"
