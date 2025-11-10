@@ -61,7 +61,7 @@ def is_barber_available(barber_name: str, dt: datetime, service_name: str):
     # ---- вътрешна функция за нормализация на диапазони
     def expand_days(days_text):
         all_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        days_text = days_text.lower().replace("–", "-").strip()
+        days_text = days_text.lower().replace("–", "-").replace(" ", "").strip()
 
         # единичен ден
         if "-" not in days_text:
