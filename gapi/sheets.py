@@ -1,3 +1,9 @@
+import os
+import json
+from datetime import datetime   # 👈 това е важното
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+import pytz
 # ===== BARBER SCHEDULE VALIDATION (Final Stable) =====
 def is_barber_available(barber_name: str, dt: datetime, service_name: str):
     """
