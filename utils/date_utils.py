@@ -1,57 +1,59 @@
-from datetime import datetime, timedelta
 import re
-from dateutil import parser
+from datetime import datetime, timedelta
 import pytz
+from dateutil import parser as dateparser
 
-# Норвежка часова зона (можеш да смениш ако искаш)
-LOCAL_TZ = pytz.timezone("Europe/Oslo")
+OSLO = pytz.timezone("Europe/Oslo")
+
+_BG_DAYS = {
+    "понеделник":"mon","вторник":"tue","сряда":"wed",
+    "четвъртък":"thu","петък":"fri","събота":"sat","неделя":"sun"
+}
+_NO_DAYS = {
+    "mandag":"mon","tirsdag":"tue","onsdag":"wed","torsdag":"thu",
+    "fredag":"fri","lørdag":"sat","søndag":"sun"
+}
+_ALL = ["mon","tue","wed","thu","fri","sat","sun"]
+
+def _next_weekday(base, target3):
+    idx = _ALL.index(target3)
+    cur = base.weekday()
+    delta = (idx - cur) % 7
+    if delta == 0: delta = 7
+    return base + timedelta(days=delta)
 
 def parse_human_date(text: str):
-    """Парсва човешки израз за време като 'утре в 11', 'в сряда 14:00', '18 ноември 10:30'"""
-    text = text.lower().strip()
+    t = text.lower().strip()
+    now = datetime.now(OSLO)
 
-    now = datetime.now(LOCAL_TZ)
+    # утре / i morgen
+    if "утре" in t or "i morgen" in t or "imorgen" in t:
+        m = re.search(r"(\d{1,2})([:\.](\d{2}))?", t)
+        hh, mm = (int(m.group(1)), int(m.group(3) or 0)) if m else (12,0)
+        return now.replace(hour=hh, minute=mm, second=0, microsecond=0) + timedelta(days=1)
 
-    # --- думи за дни ---
-    days_map = {
-        "понеделник": 0, "вторник": 1, "сряда": 2, "четвъртък": 3,
-        "петък": 4, "събота": 5, "неделя": 6,
-        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-        "friday": 4, "saturday": 5, "sunday": 6,
-    }
+    # след X часа/минути
+    m = re.search(r"след\s+(\d{1,2})\s*час", t)
+    if m:
+        h = int(m.group(1))
+        m2 = re.search(r"и\s*(\d{1,2})\s*мин", t)
+        mins = int(m2.group(1)) if m2 else 0
+        return now + timedelta(hours=h, minutes=mins)
 
-    # --- относителни думи ---
-    if "утре" in text:
-        base = now + timedelta(days=1)
-    elif "вдругиден" in text:
-        base = now + timedelta(days=2)
-    elif "днес" in text:
-        base = now
-    else:
-        base = now
+    # дни от седмицата
+    for full, abbr in {**_BG_DAYS, **_NO_DAYS}.items():
+        if full in t:
+            m = re.search(r"(\d{1,2})([:\.](\d{2}))?", t)
+            hh, mm = (int(m.group(1)), int(m.group(3) or 0)) if m else (12,0)
+            target = _next_weekday(now, abbr)
+            return target.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
-    # --- проверка за конкретен ден от седмицата ---
-    for day_name, weekday in days_map.items():
-        if day_name in text:
-            diff = (weekday - base.weekday() + 7) % 7
-            if diff == 0:
-                diff = 7  # следващия същия ден
-            base = base + timedelta(days=diff)
-            break
-
-    # --- час ---
-    hour, minute = 10, 0  # по подразбиране
-    time_match = re.search(r"(\d{1,2})([:.](\d{2}))?", text)
-    if time_match:
-        hour = int(time_match.group(1))
-        minute = int(time_match.group(3)) if time_match.group(3) else 0
-
-    # корекция: ако е само "11" без AM/PM → 11 сутринта
-    if "вечер" in text or "pm" in text and hour < 12:
-        hour += 12
-    if "сутрин" in text or "am" in text and hour >= 12:
-        hour -= 12
-
-    final_dt = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return final_dt
-
+    # fallback към dateutil
+    try:
+        dt = dateparser.parse(t, dayfirst=True, fuzzy=True)
+        if not dt:
+            return None
+        dt = OSLO.localize(dt) if dt.tzinfo is None else dt.astimezone(OSLO)
+        return dt
+    except Exception:
+        return None
